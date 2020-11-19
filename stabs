@@ -1,0 +1,97 @@
+#!/bin/bash
+
+command=${1:-"list"}
+args=(${@:2})
+
+if [ "$command" == "list" ]; then
+  result=$(osascript -l JavaScript << EOF
+  var Safari = new Application("/Applications/Safari.app");
+  var result = [];
+  for (var window = 0; window < Safari.windows.length; window++) {
+    var tabs = Safari.windows[window].tabs
+    for (var tabNum = 0; tabNum < tabs.length; tabNum++) {
+      tab = tabs[tabNum];
+      result.push({
+          url: tab.url(),
+          title: tab.name(),
+          window: window,
+          tab: tabNum
+        })
+    }
+  }
+  JSON.stringify(result)
+EOF
+)
+
+echo "$result" \
+  | jq .[] \
+  | jq -r '[.window, .tab, .url, .title]|@tsv' \
+  | awk '{  s = ""; for (i = 4; i <= NF; i++) s = s $i " "; print $1":"$2" "$3" "s}'
+
+elif [ "$command" == "json" ]; then
+  osascript -l JavaScript << EOF
+  var Safari = new Application("/Applications/Safari.app");
+  var result = [];
+  for (var window = 0; window < Safari.windows.length; window++) {
+    var tabs = Safari.windows[window].tabs
+    for (var tabNum = 0; tabNum < tabs.length; tabNum++) {
+      tab = tabs[tabNum];
+      result.push({
+          url: tab.url(),
+          title: tab.name(),
+          window: window,
+          tab: tabNum
+        })
+    }
+  }
+  JSON.stringify(result)
+EOF
+
+elif [ "$command" == "close" ]; then
+
+  # sort tabs in reverse order so numbering doesn't change when closing
+  IFS=$'\n' args=($(sort -t : -k 2 -g -r  <<<"${args[*]}"))
+
+  for arg in "${args[@]}"; do
+    if grep '^\d*:\d*$' <<< "$arg" > /dev/null; then
+      IFS=':' read -ra win_tab <<< "$arg"
+
+      window=${win_tab[0]}
+      tab=${win_tab[1]}
+
+      osascript -l JavaScript << EOF
+var Safari = new Application("/Applications/Safari.app");
+Safari.windows[$window].tabs[$tab].close()
+EOF
+    fi
+  done
+
+elif [ "$command" == "activate" ]; then
+  if grep '^\d*:\d*$' <<< "${args[0]}" > /dev/null; then
+    IFS=':' read -ra win_tab <<< "${args[0]}"
+
+    window=${win_tab[0]}
+    tab=$((win_tab[1] + 1)) # Applescript tabs are 1 indexed
+
+    osascript << EOF
+tell application "Safari"
+  tell window $window to set current tab to tab $tab
+  tell window $window to activate
+end tell
+EOF
+  else
+    >&2 printf "'${args[0]}' is not a valid window:tab_number pair\n"
+  fi
+
+elif [ "$command" == "--help" ]; then
+  >&2 printf "usage: stabs <command> [<args>]\n"
+  >&2 printf "\n"
+  >&2 printf "These are the common stabs commands:\n"
+  >&2 printf "   list       List window:tab number, url and title of open tabs in line format\n"
+  >&2 printf "   json       List window, tab number, url and title of open tabs in json format\n"
+  >&2 printf "   close      Close a single tab by window:tab number\n"
+  >&2 printf "   activate   Select an open window and tab and activate Safari\n"
+
+else
+  echo "'$1' is not a stabs command. See 'stabs --help'"
+fi
